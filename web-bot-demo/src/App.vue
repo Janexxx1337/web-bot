@@ -1,437 +1,179 @@
 <template>
   <div class="flex flex-col h-screen max-h-screen bg-gray-100">
-    <!-- Шапка бота -->
+    <!-- Bot header -->
     <div class="bg-blue-600 text-white p-4 shadow-md">
       <h1 class="text-xl font-bold">Демо-бот разработчика</h1>
       <p class="text-sm">Примеры возможностей для вашего бизнеса</p>
     </div>
 
-    <!-- Контейнер сообщений -->
-    <div class="flex-grow overflow-y-auto p-4" ref="messagesContainer">
-      <div v-for="(msg, index) in messages" :key="index"
-           :class="`mb-4 flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`">
-        <div
-            :class="`p-3 rounded-lg max-w-xs md:max-w-md ${
-            msg.sender === 'user'
-              ? 'bg-blue-500 text-white rounded-br-none'
-              : 'bg-white shadow rounded-bl-none'
-          }`"
-            v-html="formatMessage(msg.text)">
-        </div>
-      </div>
+    <!-- Messages container -->
+    <div class="flex-grow overflow-y-auto p-4" ref="messagesContainerRef">
+      <!-- Message components -->
+      <template v-for="(msg, index) in messages" :key="index">
+        <user-message v-if="msg.sender === 'user'" :text="msg.text" />
+        <bot-message v-else :text="msg.text" />
+      </template>
 
-      <!-- Индикатор печати -->
-      <div v-if="loading" class="flex items-center my-2">
-        <div class="w-2 h-2 bg-gray-400 rounded-full mr-1 animate-bounce"></div>
-        <div class="w-2 h-2 bg-gray-400 rounded-full mr-1 animate-bounce" style="animation-delay: 0.2s"></div>
-        <div class="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style="animation-delay: 0.4s"></div>
-      </div>
+      <!-- Typing indicator -->
+      <typing-indicator v-if="loading" />
 
-      <!-- Кнопки быстрых ответов -->
-      <div v-if="showOptions" class="my-4">
-        <div class="flex flex-wrap gap-2">
-          <button
-              v-for="(option, idx) in currentOptions"
-              :key="idx"
-              @click="handleOptionClick(option)"
-              class="bg-blue-100 hover:bg-blue-200 text-blue-800 font-semibold py-2 px-4 rounded-full text-sm transition-colors"
-          >
-            {{ option }}
-          </button>
-        </div>
-      </div>
+      <!-- Quick reply options -->
+      <quick-reply-options
+          v-if="showOptions"
+          :options="currentOptions"
+          @option-click="handleOptionClick"
+      />
     </div>
 
-    <!-- Форма отправки сообщения -->
-    <form @submit.prevent="handleSubmit" class="p-4 bg-white border-t">
-      <div class="flex">
-        <input
-            type="text"
-            v-model="input"
-            placeholder="Напишите сообщение..."
-            class="flex-grow p-2 border rounded-l focus:outline-none focus:ring-2 focus:ring-blue-500"
-        />
-        <button
-            type="submit"
-            class="bg-blue-600 text-white p-2 rounded-r hover:bg-blue-700 transition-colors"
-        >
-          Отправить
-        </button>
-      </div>
-    </form>
+    <!-- Message input -->
+    <message-input @message-send="handleUserMessage" />
   </div>
 </template>
 
-<script>
-export default {
-  name: 'WebBotPrototype',
-  data() {
-    return {
-      messages: [],
-      input: '',
-      loading: false,
-      showOptions: false,
-      currentState: 'start',
-      selectedPizza: '',
-      selectedSize: '',
-      telegramUsername: '@janexxx1337',
-      // Состояния и переходы
-      states: {
-        // Начальное состояние
-        start: {
-          message: 'Привет! 👋 Я демо-бот разработчика ботов. Могу показать вам, какие возможности будут доступны в вашем персональном боте. Что вас интересует?',
-          options: [
-            { text: 'Возможности ботов', next: 'features' },
-            { text: 'Примеры использования', next: 'examples' },
-            { text: 'Стоимость разработки', next: 'pricing' },
-            { text: 'Связаться с разработчиком', next: 'contact' }
-          ]
-        },
+<script setup>
+import { ref, computed, watch, nextTick, onMounted } from 'vue';
+import BotMessage from './components/BotMessage.vue';
+import UserMessage from './components/UserMessage.vue';
+import TypingIndicator from './components/TypingIndicator.vue';
+import QuickReplyOptions from './components/QuickReplyOptions.vue';
+import MessageInput from './components/MessageInput.vue';
+import botStates from './botStates.js';
+import { botUtils } from './utilities.js';
 
-        // Возможности ботов
-        features: {
-          message: '🤖 Боты могут выполнять множество задач:\n\n✅ Автоматизировать общение с клиентами\n✅ Принимать заказы и бронирования\n✅ Проводить опросы и квизы\n✅ Интегрироваться с CRM-системами\n✅ Отправлять уведомления\n✅ Принимать оплаты\n\nХотите увидеть интерактивную демонстрацию бота для пиццерии?',
-          options: [
-            { text: 'Да, покажите демонстрацию', next: 'demo_intro' },
-            { text: 'Нет, расскажите о других примерах', next: 'examples' },
-            { text: 'Вернуться в главное меню', next: 'start' }
-          ]
-        },
+// Состояние компонента
+const messages = ref([]);
+const loading = ref(false);
+const showOptions = ref(false);
+const currentState = ref('start');
+const selectedPizza = ref('');
+const selectedSize = ref('');
+const telegramUsername = ref('@janexxx1337');
+const states = ref(botStates);
+const messagesContainerRef = ref(null);
 
-        // Интерактивная демонстрация - вводная часть
-        demo_intro: {
-          message: '🎬 **Интерактивная демонстрация**\n\nПредставьте, что вы владелец пиццерии. Вот как может выглядеть работа с ботом для ваших клиентов.\n\nЧто бы вы хотели сделать?',
-          options: [
-            { text: 'Заказать пиццу', next: 'demo_order_pizza' },
-            { text: 'Посмотреть меню', next: 'demo_menu' },
-            { text: 'Статус заказа', next: 'demo_order_status' },
-            { text: 'Вернуться к возможностям', next: 'features' }
-          ]
-        },
-
-        // Демо - заказ пиццы
-        demo_order_pizza: {
-          message: '🍕 Отлично! Какую пиццу вы хотели бы заказать?',
-          options: [
-            { text: 'Пепперони', next: 'demo_select_size', data: 'Пепперони' },
-            { text: 'Маргарита', next: 'demo_select_size', data: 'Маргарита' },
-            { text: 'Четыре сыра', next: 'demo_select_size', data: 'Четыре сыра' },
-            { text: 'Гавайская', next: 'demo_select_size', data: 'Гавайская' }
-          ]
-        },
-
-        // Демо - выбор размера
-        demo_select_size: {
-          message: '👍 Вы выбрали **[PIZZA]**! Отличный выбор.\n\nКакой размер пиццы вы предпочитаете?',
-          options: [
-            { text: 'Маленькая (25см)', next: 'demo_order_complete', data: 'Маленькая (25см)' },
-            { text: 'Средняя (30см)', next: 'demo_order_complete', data: 'Средняя (30см)' },
-            { text: 'Большая (35см)', next: 'demo_order_complete', data: 'Большая (35см)' }
-          ]
-        },
-
-        // Демо - завершение заказа
-        demo_order_complete: {
-          message: '✅ Заказ оформлен!\n\n**Ваш заказ:**\nПицца: [PIZZA]\nРазмер: [SIZE]\nСтоимость: [PRICE]₽\nДоставка: 30-45 минут\n\nВаш заказ №12345 принят в работу.\n\nТаким образом, бот может провести клиента через весь процесс заказа. Что вы хотите сделать дальше?',
-          options: [
-            { text: 'Вернуться к демонстрации', next: 'demo_intro' },
-            { text: 'Другие возможности ботов', next: 'features' },
-            { text: 'Примеры для других бизнесов', next: 'examples' },
-            { text: 'Связаться с разработчиком', next: 'contact' },
-            { text: 'Вернуться в главное меню', next: 'start' }
-          ]
-        },
-
-        // Демо - просмотр меню
-        demo_menu: {
-          message: '📋 **Меню нашей пиццерии:**\n\n🍕 **Пепперони** - 400₽ (маленькая), 600₽ (средняя), 800₽ (большая)\nТоматный соус, моцарелла, пепперони\n\n🍕 **Маргарита** - 350₽ (маленькая), 525₽ (средняя), 700₽ (большая)\nТоматный соус, моцарелла, базилик\n\n🍕 **Четыре сыра** - 450₽ (маленькая), 675₽ (средняя), 900₽ (большая)\nСливочный соус, моцарелла, дор блю, пармезан, чеддер\n\n🍕 **Гавайская** - 420₽ (маленькая), 630₽ (средняя), 840₽ (большая)\nТоматный соус, моцарелла, ветчина, ананас\n\nЧто вы хотите сделать дальше?',
-          options: [
-            { text: 'Заказать пиццу', next: 'demo_order_pizza' },
-            { text: 'Вернуться к демонстрации', next: 'demo_intro' },
-            { text: 'Вернуться в главное меню', next: 'start' }
-          ]
-        },
-
-        // Демо - статус заказа
-        demo_order_status: {
-          message: '🔍 Для проверки статуса заказа нам нужен номер вашего заказа. Для демонстрации давайте проверим заказ №12345.\n\n📦 **Статус заказа #12345:**\n✅ Заказ принят: 14:30\n✅ Готовится: 14:35\n🔄 В доставке: Ожидается\n🔄 Доставлен: Ожидается\n\nПримерное время доставки: 15:10\n\nТаким образом, клиенты всегда будут в курсе статуса своего заказа.\n\nЧто вы хотите сделать дальше?',
-          options: [
-            { text: 'Заказать пиццу', next: 'demo_order_pizza' },
-            { text: 'Вернуться к демонстрации', next: 'demo_intro' },
-            { text: 'Вернуться в главное меню', next: 'start' }
-          ]
-        },
-
-        // Примеры использования
-        examples: {
-          message: '📱 **Примеры использования ботов:**\n\n🛍️ **Интернет-магазин**: каталог товаров, прием заказов, оплата.\n\n🏨 **Сфера услуг**: управление бронированиями, напоминания.\n\n🔍 **Поддержка клиентов**: ответы на частые вопросы 24/7.\n\n💼 **Бизнес-процессы**: заявки, согласования, отчеты.\n\n📊 **Маркетинг**: опросы, квизы, акции, лояльность.\n\nКакой из этих примеров вас больше интересует?',
-          options: [
-            { text: 'Интернет-магазин', next: 'example_ecommerce' },
-            { text: 'Сфера услуг', next: 'example_services' },
-            { text: 'Поддержка клиентов', next: 'example_support' },
-            { text: 'Бизнес-процессы', next: 'example_business' },
-            { text: 'Маркетинг', next: 'example_marketing' },
-            { text: 'Вернуться в главное меню', next: 'start' }
-          ]
-        },
-
-        // Пример: Интернет-магазин
-        example_ecommerce: {
-          message: '🛍️ **Бот для интернет-магазина**\n\nВ таком боте клиенты могут:\n\n✅ Просматривать каталог товаров с фото и описаниями\n✅ Добавлять товары в корзину\n✅ Оформлять заказы прямо в мессенджере\n✅ Оплачивать покупки через интегрированные платежные системы\n✅ Отслеживать статус доставки\n✅ Получать персональные скидки и акции\n\nЭто значительно упрощает процесс покупки и повышает конверсию.',
-          options: [
-            { text: 'Посмотреть другие примеры', next: 'examples' },
-            { text: 'Узнать стоимость', next: 'pricing' },
-            { text: 'Связаться с разработчиком', next: 'contact' },
-            { text: 'Вернуться в главное меню', next: 'start' }
-          ]
-        },
-
-        // Пример: Сфера услуг
-        example_services: {
-          message: '🏨 **Бот для сферы услуг**\n\nТакой бот позволяет клиентам:\n\n✅ Просматривать доступные услуги и цены\n✅ Бронировать время онлайн 24/7\n✅ Получать напоминания о предстоящих записях\n✅ Менять или отменять бронирования\n✅ Оставлять отзывы\n✅ Получать ответы на частые вопросы\n\nБизнесу это дает сокращение нагрузки на администраторов и минимизацию пропущенных клиентов.',
-          options: [
-            { text: 'Посмотреть другие примеры', next: 'examples' },
-            { text: 'Узнать стоимость', next: 'pricing' },
-            { text: 'Связаться с разработчиком', next: 'contact' },
-            { text: 'Вернуться в главное меню', next: 'start' }
-          ]
-        },
-
-        // Пример: Поддержка клиентов
-        example_support: {
-          message: '🔍 **Бот для поддержки клиентов**\n\nПреимущества бота для поддержки:\n\n✅ Работает 24/7 без выходных\n✅ Мгновенно отвечает на стандартные вопросы\n✅ Помогает находить нужную информацию\n✅ Собирает первичные данные для обращения\n✅ При необходимости подключает живого оператора\n✅ Отслеживает статус обращений\n\nЭто снижает нагрузку на специалистов поддержки и ускоряет решение проблем клиентов.',
-          options: [
-            { text: 'Посмотреть другие примеры', next: 'examples' },
-            { text: 'Узнать стоимость', next: 'pricing' },
-            { text: 'Связаться с разработчиком', next: 'contact' },
-            { text: 'Вернуться в главное меню', next: 'start' }
-          ]
-        },
-
-        // Пример: Бизнес-процессы
-        example_business: {
-          message: '💼 **Бот для бизнес-процессов**\n\nТакой бот помогает автоматизировать:\n\n✅ Прием и обработку заявок\n✅ Согласование документов\n✅ Отчетность и уведомления\n✅ Внутренние коммуникации\n✅ Сбор и анализ данных\n✅ Интеграцию с CRM и другими системами\n\nЭто оптимизирует рабочие процессы и экономит время сотрудников.',
-          options: [
-            { text: 'Посмотреть другие примеры', next: 'examples' },
-            { text: 'Узнать стоимость', next: 'pricing' },
-            { text: 'Связаться с разработчиком', next: 'contact' },
-            { text: 'Вернуться в главное меню', next: 'start' }
-          ]
-        },
-
-        // Пример: Маркетинг
-        example_marketing: {
-          message: '📊 **Бот для маркетинга**\n\nМаркетинговый бот может:\n\n✅ Проводить опросы и квизы\n✅ Собирать лиды и контактные данные\n✅ Информировать о новых акциях и скидках\n✅ Вести программу лояльности\n✅ Рассылать персонализированные предложения\n✅ Анализировать предпочтения клиентов\n\nЭто повышает вовлеченность аудитории и эффективность маркетинговых кампаний.',
-          options: [
-            { text: 'Посмотреть другие примеры', next: 'examples' },
-            { text: 'Узнать стоимость', next: 'pricing' },
-            { text: 'Связаться с разработчиком', next: 'contact' },
-            { text: 'Вернуться в главное меню', next: 'start' }
-          ]
-        },
-
-        // Стоимость разработки
-        pricing: {
-          message: '💰 **Стоимость разработки бота**\n\n⭐ **Базовый бот**: от 30,000₽\nПростой функционал с базовыми командами\n\n⭐⭐ **Стандартный бот**: от 60,000₽\nРасширенный функционал с интеграциями\n\n⭐⭐⭐ **Продвинутый бот**: от 120,000₽\nСложные интеграции, ИИ и аналитика\n\nКаждый проект уникален, и мы всегда готовы обсудить индивидуальные потребности вашего бизнеса.',
-          options: [
-            { text: 'Связаться с разработчиком', next: 'contact' },
-            { text: 'Посмотреть примеры использования', next: 'examples' },
-            { text: 'Вернуться в главное меню', next: 'start' }
-          ]
-        },
-
-        // Связаться с разработчиком
-        contact: {
-          message: '📲 **Связаться с разработчиком**\n\nДля быстрой связи, напишите мне в Telegram: **[TELEGRAM]**\n\n👉 <a href="https://t.me/janexxx1337" target="_blank" class="text-blue-600 font-bold underline">Открыть чат в Telegram</a>\n\nЯ отвечу на все ваши вопросы и помогу подобрать оптимальное решение для вашего бизнеса!',
-          options: [
-            { text: 'Вернуться в главное меню', next: 'start' }
-          ]
-        }
-      }
-    }
-  },
-  computed: {
-    currentOptions() {
-      const currentStateObj = this.states[this.currentState];
-      if (currentStateObj && currentStateObj.options) {
-        return currentStateObj.options.map(option => option.text);
-      }
-      return [];
-    }
-  },
-  methods: {
-    // Форматирование текста сообщения (обработка простых markdown-подобных элементов)
-    formatMessage(text) {
-      if (!text) return '';
-
-      // Обработка жирного текста
-      let formattedText = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-
-      // Обработка переносов строк
-      formattedText = formattedText.replace(/\n/g, '<br />');
-
-      return formattedText;
-    },
-
-    // Добавление сообщения бота с задержкой
-    addBotMessage(message, options = null, delay = 1000) {
-      this.loading = true;
-      setTimeout(() => {
-        this.messages.push({ text: message, sender: 'bot' });
-        this.loading = false;
-        if (options && options.length > 0) {
-          setTimeout(() => this.showOptions = true, 300);
-        }
-      }, delay);
-    },
-
-    // Перейти к следующему состоянию и показать соответствующее сообщение
-    goToState(stateName, data = null) {
-      if (!this.states[stateName]) {
-        console.error('Неизвестное состояние:', stateName);
-        return;
-      }
-
-      this.currentState = stateName;
-      this.showOptions = false;
-
-      let message = this.states[stateName].message;
-
-      // Подстановка переменных в сообщение
-      if (stateName === 'demo_select_size' && this.selectedPizza) {
-        message = message.replace('[PIZZA]', this.selectedPizza);
-      }
-      else if (stateName === 'demo_order_complete') {
-        const pizza = this.selectedPizza || 'Пепперони';
-        const size = this.selectedSize || 'Средняя (30см)';
-        const price = this.getPizzaPrice(pizza, size);
-
-        message = message
-            .replace('[PIZZA]', pizza)
-            .replace('[SIZE]', size)
-            .replace('[PRICE]', price);
-      }
-      else if (stateName === 'contact') {
-        message = message.replace('[TELEGRAM]', this.telegramUsername);
-      }
-
-      this.addBotMessage(message, this.currentOptions);
-    },
-
-    // Генерация цены для демо заказа пиццы
-    getPizzaPrice(pizza, size) {
-      const basePrices = {
-        'Пепперони': 400,
-        'Маргарита': 350,
-        'Четыре сыра': 450,
-        'Гавайская': 420
-      };
-
-      const sizeMultipliers = {
-        'Маленькая (25см)': 1,
-        'Средняя (30см)': 1.5,
-        'Большая (35см)': 2
-      };
-
-      const basePrice = basePrices[pizza] || 400;
-      const multiplier = sizeMultipliers[size] || 1;
-
-      return Math.floor(basePrice * multiplier);
-    },
-
-    // Обработка клика по кнопке опции
-    handleOptionClick(optionText) {
-      // Добавить сообщение пользователя
-      this.messages.push({ text: optionText, sender: 'user' });
-      this.showOptions = false;
-
-      // Найти соответствующий объект опции
-      const currentStateObj = this.states[this.currentState];
-      const selectedOption = currentStateObj.options.find(option => option.text === optionText);
-
-      if (!selectedOption) {
-        console.error('Опция не найдена:', optionText);
-        return;
-      }
-
-      // Сохранить данные, если они есть
-      if (selectedOption.data) {
-        if (this.currentState === 'demo_order_pizza') {
-          this.selectedPizza = selectedOption.data;
-        } else if (this.currentState === 'demo_select_size') {
-          this.selectedSize = selectedOption.data;
-        }
-      }
-
-      // Перейти к следующему состоянию
-      setTimeout(() => {
-        this.goToState(selectedOption.next);
-      }, 500);
-    },
-
-    // Обработка отправки сообщения пользователем
-    handleSubmit() {
-      if (this.input.trim() === '') return;
-
-      this.messages.push({ text: this.input, sender: 'user' });
-      const userInput = this.input.toLowerCase();
-      this.input = '';
-      this.showOptions = false;
-
-      // Простая логика для ответов на текстовые сообщения
-      setTimeout(() => {
-        if (userInput.includes('привет') || userInput.includes('здравствуйте') || userInput.includes('добрый день')) {
-          this.goToState('start');
-        } else if (userInput.includes('возможности') || userInput.includes('что умеет') || userInput.includes('что может')) {
-          this.goToState('features');
-        } else if (userInput.includes('пример') || userInput.includes('кейс') || userInput.includes('использование')) {
-          this.goToState('examples');
-        } else if (userInput.includes('цена') || userInput.includes('стоимость') || userInput.includes('сколько стоит')) {
-          this.goToState('pricing');
-        } else if (userInput.includes('контакт') || userInput.includes('связь') || userInput.includes('заказать') ||
-            userInput.includes('телеграм') || userInput.includes('telegram')) {
-          this.goToState('contact');
-        } else if (userInput.includes('да') && this.currentState === 'features') {
-          this.goToState('demo_intro');
-        } else if (userInput.includes('заказ') && userInput.includes('пицц')) {
-          this.goToState('demo_order_pizza');
-        } else if (userInput.includes('меню')) {
-          this.goToState('demo_menu');
-        } else if (userInput.includes('статус') || userInput.includes('где') && userInput.includes('заказ')) {
-          this.goToState('demo_order_status');
-        } else if (userInput.includes('главное меню') || userInput.includes('вернуться') || userInput.includes('начало')) {
-          this.goToState('start');
-        } else {
-          this.addBotMessage('Извините, я не совсем понял ваш запрос. Выберите один из вариантов ниже:', this.currentOptions);
-        }
-      }, 500);
-    },
-
-    // Прокрутка контейнера сообщений
-    scrollToBottom() {
-      if (this.$refs.messagesContainer) {
-        this.$nextTick(() => {
-          this.$refs.messagesContainer.scrollTop = this.$refs.messagesContainer.scrollHeight;
-        });
-      }
-    }
-  },
-  watch: {
-    // Следим за изменениями в сообщениях для автопрокрутки
-    messages() {
-      this.scrollToBottom();
-    },
-    showOptions() {
-      this.scrollToBottom();
-    }
-  },
-  mounted() {
-    // Приветственное сообщение при загрузке компонента
-    setTimeout(() => {
-      this.goToState('start');
-    }, 1000);
+// Вычисляемые свойства
+const currentOptions = computed(() => {
+  const currentStateObj = states.value[currentState.value];
+  if (currentStateObj && currentStateObj.options) {
+    return currentStateObj.options.map(option => option.text);
   }
-}
+  return [];
+});
+
+// Методы
+const addBotMessage = (message, options = null, delay = 1000) => {
+  loading.value = true;
+  setTimeout(() => {
+    messages.value.push({ text: message, sender: 'bot' });
+    loading.value = false;
+    if (options && options.length > 0) {
+      setTimeout(() => showOptions.value = true, 300);
+    }
+  }, delay);
+};
+
+const goToState = (stateName, data = null) => {
+  if (!states.value[stateName]) {
+    console.error('Unknown state:', stateName);
+    return;
+  }
+
+  currentState.value = stateName;
+  showOptions.value = false;
+
+  let message = states.value[stateName].message;
+
+  // Замена переменных в сообщении
+  if (stateName === 'demo_select_size' && selectedPizza.value) {
+    message = message.replace('[PIZZA]', selectedPizza.value);
+  }
+  else if (stateName === 'demo_order_complete') {
+    const pizza = selectedPizza.value || 'Пепперони';
+    const size = selectedSize.value || 'Средняя (30см)';
+    const price = botUtils.getPizzaPrice(pizza, size);
+
+    message = message
+        .replace('[PIZZA]', pizza)
+        .replace('[SIZE]', size)
+        .replace('[PRICE]', price);
+  }
+  else if (stateName === 'contact') {
+    message = message.replace('[TELEGRAM]', telegramUsername.value);
+  }
+
+  addBotMessage(message, states.value[stateName].options);
+};
+
+const handleOptionClick = (optionText) => {
+  // Добавить сообщение пользователя
+  messages.value.push({ text: optionText, sender: 'user' });
+  showOptions.value = false;
+
+  // Найти соответствующий объект опции
+  const currentStateObj = states.value[currentState.value];
+  const selectedOption = currentStateObj.options.find(option => option.text === optionText);
+
+  if (!selectedOption) {
+    console.error('Option not found:', optionText);
+    return;
+  }
+
+  // Сохранить данные, если они есть
+  if (selectedOption.data) {
+    if (currentState.value === 'demo_order_pizza') {
+      selectedPizza.value = selectedOption.data;
+    } else if (currentState.value === 'demo_select_size') {
+      selectedSize.value = selectedOption.data;
+    }
+  }
+
+  // Перейти к следующему состоянию
+  setTimeout(() => {
+    goToState(selectedOption.next);
+  }, 500);
+};
+
+const handleUserMessage = (message) => {
+  messages.value.push({ text: message, sender: 'user' });
+  showOptions.value = false;
+
+  setTimeout(() => {
+    const nextState = botUtils.processUserInput(message);
+
+    if (nextState) {
+      goToState(nextState);
+    } else if (message.toLowerCase().includes('да') && currentState.value === 'features') {
+      goToState('demo_intro');
+    } else {
+      addBotMessage('Извините, я не совсем понял ваш запрос. Выберите один из вариантов ниже:', currentOptions.value);
+    }
+  }, 500);
+};
+
+const scrollToBottom = () => {
+  if (messagesContainerRef.value) {
+    nextTick(() => {
+      messagesContainerRef.value.scrollTop = messagesContainerRef.value.scrollHeight;
+    });
+  }
+};
+
+// Обработчики событий
+watch(messages, () => {
+  scrollToBottom();
+});
+
+watch(showOptions, () => {
+  scrollToBottom();
+});
+
+// Монтирование компонента
+onMounted(() => {
+  // Показать приветственное сообщение при загрузке компонента
+  setTimeout(() => {
+    goToState('start');
+  }, 1000);
+});
 </script>
 
 <style lang="scss" scoped>
